@@ -6,9 +6,9 @@ type Inscription struct {
 }
 
 type Business struct {
-	DeployHeight       int64
-	OpenMintHeight     int64
-	OpenTransferHeight int64
+	DeployHeight       uint64
+	OpenMintHeight     uint64
+	OpenTransferHeight uint64
 
 	MemoLenMin int
 	MemoLenMax int

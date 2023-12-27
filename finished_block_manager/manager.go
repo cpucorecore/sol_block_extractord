@@ -4,20 +4,20 @@ import (
 	"sync/atomic"
 )
 
-var finishedHeight int64
+var finishedHeight uint64
 
-func Setup(startBlock int64) {
+func Setup(startBlock uint64) {
 	finishedHeight = 0
 	if startBlock > 0 {
 		Update(startBlock - 1)
 	}
 }
 
-func Get() int64 {
-	return atomic.LoadInt64(&finishedHeight)
+func Get() uint64 {
+	return atomic.LoadUint64(&finishedHeight)
 }
 
-func Update(height int64) {
-	old := atomic.LoadInt64(&finishedHeight)
-	atomic.CompareAndSwapInt64(&finishedHeight, old, height)
+func Update(height uint64) {
+	old := atomic.LoadUint64(&finishedHeight)
+	atomic.CompareAndSwapUint64(&finishedHeight, old, height)
 }

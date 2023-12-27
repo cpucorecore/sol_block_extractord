@@ -1,16 +1,13 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
-	"strconv"
 
-	injcommon "github.com/InjectiveLabs/sdk-go/client/common"
+	"github.com/btcsuite/btcd/btcutil/base58"
+	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/urfave/cli/v2"
 
-	"sol_block_extractord/biz"
-	"sol_block_extractord/common"
 	"sol_block_extractord/config"
 	"sol_block_extractord/filters"
 	"sol_block_extractord/finished_block_manager"
@@ -21,30 +18,18 @@ import (
 
 func main() {
 	app := &cli.App{
-		Name: "inj_extractor",
+		Name: "sol_extractor",
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:        "inj_network_name",
-				Value:       "mainnet",
-				Destination: &config.Cfg.Inj.NetworkName,
-				Required:    true,
-			},
-			&cli.StringFlag{
-				Name:        "inj_network_node",
-				Value:       "lb",
-				Destination: &config.Cfg.Inj.NetworkNode,
-				Required:    true,
-			},
-			&cli.Int64Flag{
-				Name:        "inj_start_block",
+			&cli.Uint64Flag{
+				Name:        "start_slot",
 				Value:       0,
-				Destination: &config.Cfg.Inj.StartBlock,
+				Destination: &config.Cfg.StartSlot,
 				Required:    true,
 			},
 			&cli.IntFlag{
-				Name:        "inj_block_workers",
+				Name:        "block_workers",
 				Value:       1,
-				Destination: &config.Cfg.Inj.BlockWorkers,
+				Destination: &config.Cfg.BlockWorkers,
 				Required:    true,
 			},
 			&cli.StringFlag{
@@ -94,19 +79,19 @@ func main() {
 				Value:       15,
 				Destination: &config.Cfg.Biz.MemoLenMin,
 			},
-			&cli.Int64Flag{
+			&cli.Uint64Flag{
 				Name:        "open_mint_height",
 				Value:       0,
 				Destination: &config.Cfg.Biz.OpenMintHeight,
 				Required:    true,
 			},
-			&cli.Int64Flag{
+			&cli.Uint64Flag{
 				Name:        "open_transfer_height",
 				Value:       0,
 				Destination: &config.Cfg.Biz.OpenTransferHeight,
 				Required:    true,
 			},
-			&cli.Int64Flag{
+			&cli.Uint64Flag{
 				Name:        "deploy_height",
 				Value:       0,
 				Destination: &config.Cfg.Biz.DeployHeight,
@@ -120,63 +105,50 @@ func main() {
 				Action: func(context *cli.Context) error {
 					log.Logger.Info(fmt.Sprintf("cfg:%s", config.Cfg.ToString()))
 
-					injNetwork := injcommon.LoadNetwork(config.Cfg.Inj.NetworkName, config.Cfg.Inj.NetworkNode)
-					GInjTmEndpoint = injNetwork.TmEndpoint
+					finished_block_manager.Setup(config.Cfg.StartSlot)
 
-					finished_block_manager.Setup(config.Cfg.Inj.StartBlock)
+					taskCh := make(chan uint64, 10000)
+					go SOLDispatchTasks(config.Cfg.StartSlot, taskCh)
 
-					taskCh := make(chan int64, 10000)
-					go DispatchTasks(config.Cfg.Inj.StartBlock, taskCh)
-
-					blockCh := make(chan BlockInfo, 1000)
-					for workerId := 0; workerId < config.Cfg.Inj.BlockWorkers; workerId++ {
-						go SyncBlocks(GInjTmEndpoint, workerId, taskCh, blockCh)
+					blockCh := make(chan *rpc.GetBlockResult, 1000)
+					for workerId := 0; workerId < config.Cfg.BlockWorkers; workerId++ {
+						go SOLSyncBlocks(workerId, taskCh, blockCh)
 					}
 
 					operationCh := make(chan types.Operation, 1000)
 					go postgres.PostOperations(operationCh)
 
 					for b := range blockCh {
-						curHeight := b.B.Block.Height
-						log.Logger.Info(fmt.Sprintf("block:%d with %d txs begin", curHeight, len(b.B.Block.Txs)))
+						curSlot := b.ParentSlot + 1
+						log.Logger.Info(fmt.Sprintf("slot:%d with %d txs begin", curSlot, len(b.Transactions)))
 
-						for txIdx, tx := range b.B.Block.Txs {
-							txHash := "0x" + hex.EncodeToString(tx.Hash())
-							txCoordinate := common.TxCoordinate(curHeight, txIdx, txHash)
-							log.Logger.Info(fmt.Sprintf("%s begin", txCoordinate))
-
-							if b.R.TxsResults[txIdx].Code != 0 {
-								log.Logger.Info(fmt.Sprintf("ignore %s for 'tx failed on blockchain'", txCoordinate))
-								continue
-							}
-
-							op, err := biz.Tx2Op(tx)
+						for txIdx, txWithMeta := range b.Transactions {
+							op, err := ParseTx(*b.BlockHeight, txIdx, &txWithMeta)
 							if err != nil {
-								log.Logger.Info(fmt.Sprintf("Tx2Op %s failed, err: %v", txCoordinate, err))
+								log.Logger.Info(fmt.Sprintf("ParseTx err: %s", err.Error()))
 								continue
 							}
 
-							op.BlockHeight = b.B.Block.Height
-							op.BlockHeightStr = strconv.FormatInt(op.BlockHeight, 10)
-
-							op.BlockTimeSec = b.B.Block.Header.Time.Unix()
-							op.BlockTimeSecStr = strconv.FormatInt(op.BlockTimeSec, 10)
-
-							op.TxIdx = txIdx
-							op.TxHash = txHash
+							op.SetupBlockInfo(*b.BlockHeight, int64(*b.BlockTime), txIdx)
+							memoBase58Decoded := string(base58.Decode(op.MemoRaw))
+							op.M, err = types.ParseMemo(memoBase58Decoded)
+							if err != nil {
+								log.Logger.Info(fmt.Sprintf("ParseMemo memo[%s] err: %s", memoBase58Decoded, err.Error()))
+								continue
+							}
 
 							pass, reason := filters.FilterOperation(op)
 							if !pass {
-								log.Logger.Info(fmt.Sprintf("%s filtered with reason: [%s]", txCoordinate, reason))
+								log.Logger.Info(fmt.Sprintf("filtered with reason: [%s]", reason))
 								continue
 							}
 
 							operationCh <- op
-							log.Logger.Info(fmt.Sprintf("%s commit operation to queue", txCoordinate))
+							log.Logger.Info(fmt.Sprintf("commit operation to queue"))
 						}
 
-						log.Logger.Info(fmt.Sprintf("block:%d all operations commit to queue", curHeight))
-						finished_block_manager.Update(curHeight)
+						log.Logger.Info(fmt.Sprintf("block:%d all operations commit to queue", curSlot))
+						finished_block_manager.Update(curSlot)
 					}
 					return nil
 				},

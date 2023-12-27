@@ -3,9 +3,10 @@ package config
 import "encoding/json"
 
 type Config struct {
-	Inj Injective
-	Pg  Postgres
-	Biz Business
+	Pg           Postgres
+	Biz          Business
+	StartSlot    uint64
+	BlockWorkers int
 }
 
 func (cfg *Config) ToString() string {
