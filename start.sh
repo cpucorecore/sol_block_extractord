@@ -1,0 +1,1 @@
+./sol_block_extractord --block_workers 1 --start_slot 117571 --pg_host 127.0.0.1 --pg_port 5432 --pg_user ins_inj --pg_password test1234 --pg_dbname ins_inj2 -p test-20 --tick TTYY --open_mint_height 47800 --open_transfer_height 47800 --deploy_height 47800 start

@@ -5,12 +5,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/holiman/uint256"
 	"os"
 	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/gagliardetto/solana-go/rpc/jsonrpc"
+	"github.com/holiman/uint256"
 
 	"sol_block_extractord/common"
 	"sol_block_extractord/finished_block_manager"
@@ -117,6 +118,13 @@ func SOLSyncBlocks(workerId int, taskCh chan uint64, blockCh chan *rpc.GetBlockR
 			end = time.Now()
 			durationMs := end.Sub(start).Milliseconds()
 			if err != nil {
+				var rpcError *jsonrpc.RPCError
+				if errors.As(err, &rpcError) {
+					if rpcError.Code == -32007 {
+						log.Logger.Warn(fmt.Sprintf("slot %d skipped, we skipped also, err: %v", task, rpcError))
+						break
+					}
+				}
 				getBlockFailedCnt++
 				log.Logger.Warn(fmt.Sprintf("task %s do 'GetBlock' failed %d times with err: [%v], elapse ms:%v", taskCoordinate, getBlockFailedCnt, err, durationMs))
 				time.Sleep(time.Second * 5)
