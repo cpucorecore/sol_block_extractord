@@ -10,6 +10,9 @@ type Business struct {
 	OpenMintHeight     uint64
 	OpenTransferHeight uint64
 
+	FreeMint    bool
+	ToAddrLimit string
+
 	MemoLenMin int
 	MemoLenMax int
 

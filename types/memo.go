@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/btcsuite/btcd/btcutil/base58"
 	"github.com/buger/jsonparser"
 
 	"sol_block_extractord/config"
@@ -53,6 +54,14 @@ type Memo struct {
 	MaxN int64
 }
 
+func (m *Memo) IsMintOp() bool {
+	return m.Op == OpMint
+}
+
+func (m *Memo) ShouldParseTxTransferValue() bool {
+	return m.IsMintOp() && !config.Cfg.Biz.FreeMint // || m.IsBuyOp()
+}
+
 func (m *Memo) IsValidOp() (bool, string) {
 	switch m.Op {
 	case OpDeploy:
@@ -88,8 +97,9 @@ func (m *Memo) IsValidTick() (pass bool, reason string) {
 	return
 }
 
-func ParseMemo(base64Memo string) (memo Memo, err error) {
-	memoBase64Decoded, err := base64.StdEncoding.DecodeString(base64Memo)
+func ParseMemo(base58Memo string) (memo Memo, err error) {
+	memoBase58Decoded := string(base58.Decode(base58Memo))
+	memoBase64Decoded, err := base64.StdEncoding.DecodeString(memoBase58Decoded)
 	if err != nil {
 		err = errors.New(fmt.Sprintf("decode memo in base64 err: %v", err))
 		return

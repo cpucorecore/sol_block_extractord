@@ -145,7 +145,42 @@ func SOLSyncBlocks(workerId int, taskCh chan uint64, blockCh chan *rpc.GetBlockR
 	}
 }
 
-func ParseTx(blockHeight uint64, txIdx int, txWithMeta *rpc.TransactionWithMeta) (op types.Operation, err error) {
+func isTheProgramId(expected, actual solana.PublicKey) bool {
+	return expected.Equals(actual)
+}
+
+func isSystemTransferProgramId(id solana.PublicKey) bool {
+	return isTheProgramId(systemTransferProgramId, id)
+}
+
+func isMemoProgramId(id solana.PublicKey) bool {
+	return isTheProgramId(memoProgramId, id)
+}
+
+func findInstructionIndexes(publicKeys []solana.PublicKey, instructions []solana.CompiledInstruction, filter func(solana.PublicKey) bool) (indexes []int) {
+	for index, inst := range instructions {
+		if filter(publicKeys[inst.ProgramIDIndex]) {
+			indexes = append(indexes, index)
+		}
+	}
+	return
+}
+
+func parseSystemInstructionCallData(callData []byte) (sysInst uint32, value uint64, err error) {
+	switch len(callData) {
+	case 12:
+		sysInst = binary.LittleEndian.Uint32(callData[:4])
+		value = binary.LittleEndian.Uint64(callData[4:])
+	case 9:
+		sysInst = uint32(callData[0])
+		value = binary.LittleEndian.Uint64(callData[1:])
+	default:
+		err = errors.New(fmt.Sprintf("wrong system transfer call data len:%d", len(callData)))
+	}
+	return
+}
+
+func ParseTx(blockHeight uint64, txIdx int, txWithMeta *rpc.TransactionWithMeta, parseMemo func(string) (types.Memo, error)) (op types.Operation, err error) {
 	tx, err := txWithMeta.GetTransaction()
 	if err != nil {
 		// TODO FIXME
@@ -160,70 +195,61 @@ func ParseTx(blockHeight uint64, txIdx int, txWithMeta *rpc.TransactionWithMeta)
 	}
 
 	txCoordinate := common.TxCoordinate(blockHeight, txIdx, tx.Signatures[0].String())
-
 	log.Logger.Info(fmt.Sprintf("--%s begin", txCoordinate))
+
 	if txWithMeta.Meta.Err != nil {
-		err = errors.New(fmt.Sprintf("tx not success with err: %v, ignore", txWithMeta.Meta.Err))
+		err = errors.New(fmt.Sprintf("tx not success on chain with err: %v", txWithMeta.Meta.Err))
 		return
 	}
 
-	if len(tx.Message.Instructions) != 2 {
-		// TODO FIXME: until now we don't want to process a transaction with len(instructions) != 2
-		err = errors.New(fmt.Sprintf("tx instructions len %d != 2", len(tx.Message.Instructions)))
+	memoProgramInstructionIndexes := findInstructionIndexes(tx.Message.AccountKeys, tx.Message.Instructions, isMemoProgramId)
+	if len(memoProgramInstructionIndexes) == 0 {
+		err = errors.New(fmt.Sprintf("no memo instruction"))
 		return
 	}
 
-	// TODO FIXME: no limit for the sequence of instructions
-	transferInst := tx.Message.Instructions[0]
-	callMemoInst := tx.Message.Instructions[1]
-
-	if !tx.Message.AccountKeys[transferInst.ProgramIDIndex].Equals(systemTransferProgramId) {
-		err = errors.New(fmt.Sprintf("instuction transfer: wrong program id:%s, must:%s",
-			tx.Message.AccountKeys[transferInst.ProgramIDIndex].String(),
-			systemTransferProgramId.String(),
-		))
+	op.MemoRaw = string(tx.Message.Instructions[memoProgramInstructionIndexes[0]].Data)
+	op.M, err = parseMemo(op.MemoRaw)
+	if err != nil {
 		return
 	}
 
-	if !tx.Message.AccountKeys[callMemoInst.ProgramIDIndex].Equals(memoProgramId) {
-		err = errors.New(fmt.Sprintf("instruction memo: wrong program id:%s, must:%s",
-			tx.Message.AccountKeys[callMemoInst.ProgramIDIndex].String(),
-			memoProgramId.String(),
-		))
-		return
-	}
+	op.Denom = NativeDenom
+	if op.M.ShouldParseTxTransferValue() {
+		systemTransferProgramInstructionIndexes := findInstructionIndexes(tx.Message.AccountKeys, tx.Message.Instructions, isSystemTransferProgramId)
+		if len(systemTransferProgramInstructionIndexes) == 0 {
+			err = errors.New(fmt.Sprintf("no system transfer instruction"))
+			return
+		}
 
-	if !tx.Message.AccountKeys[transferInst.Accounts[0]].Equals(tx.Message.AccountKeys[callMemoInst.Accounts[0]]) {
-		err = errors.New(fmt.Sprintf("transfer instruction from addr:%s != memo instruction from addr:%s",
-			tx.Message.AccountKeys[transferInst.Accounts[0]].String(),
-			tx.Message.AccountKeys[callMemoInst.Accounts[0]].String(),
-		))
-		return
-	}
+		if tx.Message.Instructions[memoProgramInstructionIndexes[0]].Accounts[0] != tx.Message.Instructions[systemTransferProgramInstructionIndexes[0]].Accounts[0] {
+			err = errors.New(fmt.Sprintf("memo instruction from addr %v != system transfer instruction from addr %v",
+				tx.Message.Instructions[memoProgramInstructionIndexes[0]].Accounts[0],
+				tx.Message.Instructions[systemTransferProgramInstructionIndexes[0]].Accounts[0],
+			))
+			return
+		}
 
-	var inst, value uint64
-	if len(transferInst.Data) == 12 {
-		inst = uint64(binary.LittleEndian.Uint32(transferInst.Data[:4]))
-		value = binary.LittleEndian.Uint64(transferInst.Data[4:])
-	} else if len(transferInst.Data) == 9 {
-		inst = uint64(transferInst.Data[0])
-		value = binary.LittleEndian.Uint64(transferInst.Data[1:])
+		systemInstructionType, value, err := parseSystemInstructionCallData(tx.Message.Instructions[systemTransferProgramInstructionIndexes[0]].Data)
+		if err != nil {
+			return op, err
+		}
+
+		if systemInstructionType != SystemInstructionTransfer {
+			err = errors.New(fmt.Sprintf("wrong system transfer instruction %d", systemInstructionType))
+			return op, err
+		}
+
+		op.From = tx.Message.AccountKeys[tx.Message.Instructions[systemTransferProgramInstructionIndexes[0]].Accounts[0]].String()
+		op.To = tx.Message.AccountKeys[tx.Message.Instructions[systemTransferProgramInstructionIndexes[0]].Accounts[1]].String()
+		op.Value = uint256.NewInt(value)
 	} else {
-		err = errors.New(fmt.Sprintf("wrong system transfer call data len:%d", len(transferInst.Data)))
-		return
-	}
-
-	if inst != SystemInstructionTransfer {
-		err = errors.New(fmt.Sprintf("wrong system transfer instruction:%d", inst))
-		return
+		op.From = tx.Message.AccountKeys[tx.Message.Instructions[memoProgramInstructionIndexes[0]].Accounts[0]].String()
+		op.To = memoProgramId.String()
+		op.Value = uint256.NewInt(0)
 	}
 
 	op.TxHash = tx.Signatures[0].String()
-	op.From = tx.Message.AccountKeys[transferInst.Accounts[0]].String()
-	op.To = tx.Message.AccountKeys[transferInst.Accounts[1]].String()
-	op.Denom = NativeDenom
-	op.Value = uint256.NewInt(value)
-	op.MemoRaw = callMemoInst.Data.String()
 
 	return op, nil
 }

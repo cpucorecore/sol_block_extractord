@@ -123,7 +123,7 @@ func main() {
 						log.Logger.Info(fmt.Sprintf("slot:%d with %d txs begin", curSlot, len(b.Transactions)))
 
 						for txIdx, txWithMeta := range b.Transactions {
-							op, err := ParseTx(*b.BlockHeight, txIdx, &txWithMeta)
+							op, err := ParseTx(*b.BlockHeight, txIdx, &txWithMeta, types.ParseMemo)
 							if err != nil {
 								log.Logger.Info(fmt.Sprintf("ParseTx err: %s", err.Error()))
 								continue
