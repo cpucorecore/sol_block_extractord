@@ -1,0 +1,36 @@
+postgres:
+  host: "127.0.0.1"
+  port: 5432
+  user: "User"
+  passwd: "Passwd"
+  db: "Db"
+
+business:
+  deployHeight: 666
+  openMintHeight: 888
+  openTransferHeight: 888
+
+  freeMint: true
+  toAddrLimit: ""
+
+  memoLenMin: 6
+  memoLenMax: 512
+
+  Inscription:
+    p: "test-20"
+    tick: "TEST"
+
+startSlot: 666
+workers: 1
+  
+  DeployHeight       uint64
+  OpenMintHeight     uint64
+  OpenTransferHeight uint64
+  
+  FreeMint    bool
+  ToAddrLimit string
+  
+  MemoLenMin int
+  MemoLenMax int
+  
+  Inscription Inscription

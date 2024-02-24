@@ -18,7 +18,7 @@ import (
 
 func main() {
 	app := &cli.App{
-		Name: "sol_extractor",
+		Name: "blockchain_tx_parser",
 		Flags: []cli.Flag{
 			&cli.Uint64Flag{
 				Name:        "start_slot",
@@ -30,7 +30,6 @@ func main() {
 				Name:        "block_workers",
 				Value:       1,
 				Destination: &config.Cfg.BlockWorkers,
-				Required:    true,
 			},
 			&cli.StringFlag{
 				Name:        "pg_host",

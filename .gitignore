@@ -3,3 +3,4 @@ go.sum
 inj_block_extractord
 sol_block_extractord
 nohup.out
+config.yaml

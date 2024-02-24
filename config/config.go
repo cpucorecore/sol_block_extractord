@@ -1,17 +1,35 @@
 package config
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"gopkg.in/yaml.v3"
+	"os"
+)
 
 type Config struct {
-	Pg           Postgres
-	Biz          Business
-	StartSlot    uint64
-	BlockWorkers int
+	Postgres  Postgres
+	Business  Business
+	StartSlot uint64
+	Workers   uint
 }
 
-func (cfg *Config) ToString() string {
-	bs, _ := json.Marshal(cfg)
-	return string(bs)
+func (c *Config) ToString() string {
+	bytes, _ := json.MarshalIndent(c, "", "  ")
+	return string(bytes)
 }
 
-var Cfg Config
+var GConfig Config
+
+func LoadFromFile(path string) (err error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	err = yaml.Unmarshal(bytes, &GConfig)
+	if err != nil {
+		return
+	}
+
+	return
+}
